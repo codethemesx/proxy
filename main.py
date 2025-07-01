@@ -34,6 +34,10 @@ def proxy_masked(path):
             playlist_text = resp.text
             lines = playlist_text.splitlines()
             new_lines = []
+
+            # Base URL do proxy, para reescrever as URLs internas
+            base_url = request.host_url.rstrip('/')
+
             for line in lines:
                 line_strip = line.strip()
                 if line_strip == '' or line_strip.startswith('#'):
@@ -42,8 +46,9 @@ def proxy_masked(path):
                     abs_url = urljoin(remote_url, line_strip)
                     # Reescreve as URLs internas da playlist para passar pelo seu proxy também
                     proxied_path = abs_url.replace(REMOTE_BASE, '')
-                    proxied_url = f"http://127.0.0.1:5000{proxied_path}?referer={referer}"
+                    proxied_url = f"{base_url}{proxied_path}?referer={referer}"
                     new_lines.append(proxied_url)
+
             data = "\n".join(new_lines)
             response = Response(data)
             response.headers['Content-Type'] = 'application/vnd.apple.mpegurl'
@@ -52,6 +57,7 @@ def proxy_masked(path):
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         yield chunk
+
             response = Response(generate())
             response.headers['Content-Type'] = content_type if content_type else 'video/MP2T'
 
@@ -69,4 +75,4 @@ def proxy_masked(path):
         return f"Erro no proxy: {e}", 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8000, debug=True)
