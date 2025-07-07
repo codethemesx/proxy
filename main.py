@@ -1,19 +1,37 @@
 from flask import Flask, request, Response
 import requests
 from urllib.parse import urljoin
+import json
+import os
 
 app = Flask(__name__)
 session = requests.Session()
 
-# Domínio base remoto que você quer mascarar
-REMOTE_BASE = "https://embmaxtv.online"
+# Carregar JSONs de bases e referers
+def carregar_json(caminho):
+    if os.path.exists(caminho):
+        with open(caminho, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
 
-@app.route('/<path:path>')
-def proxy_masked(path):
-    referer = request.args.get('referer', 'https://embedcanaistv.com')  # Pode ajustar ou parametrizar
+BASES = carregar_json('bases.json')
+REFERERS = carregar_json('referers.json')
 
-    # Monta a URL remota completa
-    remote_url = urljoin(REMOTE_BASE + '/', path)
+def obter_entrada_por_saida(lista, saida):
+    for item in lista:
+        if item["saida"] == saida:
+            return item["entrada"]
+    return None
+
+@app.route('/<saida_base>/<saida_referer>/<path:path>')
+def proxy_masked(saida_base, saida_referer, path):
+    base_remota = obter_entrada_por_saida(BASES, saida_base)
+    referer = obter_entrada_por_saida(REFERERS, saida_referer)
+
+    if not base_remota or not referer:
+        return "Base remota ou referer não encontrados no JSON.", 400
+
+    remote_url = urljoin(base_remota + '/', path)
 
     headers = {
         'Referer': referer,
@@ -35,7 +53,6 @@ def proxy_masked(path):
             lines = playlist_text.splitlines()
             new_lines = []
 
-            # Base URL do proxy, para reescrever as URLs internas
             base_url = request.host_url.rstrip('/')
 
             for line in lines:
@@ -44,10 +61,12 @@ def proxy_masked(path):
                     new_lines.append(line_strip)
                 else:
                     abs_url = urljoin(remote_url, line_strip)
-                    # Reescreve as URLs internas da playlist para passar pelo seu proxy também
-                    proxied_path = abs_url.replace(REMOTE_BASE, '')
-                    proxied_url = f"{base_url}{proxied_path}?referer={referer}"
-                    new_lines.append(proxied_url)
+                    if abs_url.startswith(base_remota):
+                        relative_path = abs_url.replace(base_remota + '/', '')
+                        proxied_url = f"{base_url}/{saida_base}/{saida_referer}/{relative_path}"
+                        new_lines.append(proxied_url)
+                    else:
+                        new_lines.append(abs_url)
 
             data = "\n".join(new_lines)
             response = Response(data)
@@ -61,13 +80,13 @@ def proxy_masked(path):
             response = Response(generate())
             response.headers['Content-Type'] = content_type if content_type else 'video/MP2T'
 
-        if 'Content-Disposition' in response.headers:
-            del response.headers['Content-Disposition']
-
+        # Headers adicionais
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Headers'] = '*'
         response.headers['Cache-Control'] = 'no-cache'
         response.headers['Connection'] = 'keep-alive'
+        if 'Content-Disposition' in response.headers:
+            del response.headers['Content-Disposition']
 
         return response
 
