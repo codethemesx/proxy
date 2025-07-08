@@ -1,5 +1,5 @@
 [
   { "entrada": "https://embmaxtv.online", "saida": "1" },
   { "entrada": "https://lb1.embmaxtv.online", "saida": "2" },
-  { "entrada": "outbound-proxy-us-east1-0-glob-usercontent-client-id-7668120281.googleapis.com.pt", "saida": "3" }
+  { "entrada": "https://outbound-proxy-us-east1-0-glob-usercontent-client-id-7668120281.googleapis.com.pt", "saida": "3" }
 ]
