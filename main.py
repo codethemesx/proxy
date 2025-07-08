@@ -7,8 +7,8 @@ app = Flask(__name__)
 session = requests.Session()
 
 # URLs dos JSONs remotos
-URL_BASES_JSON = 'https://seudominio.com/jsons/bases.json'
-URL_REFERERS_JSON = 'https://seudominio.com/jsons/referers.json'
+URL_BASES_JSON = 'https://raw.githubusercontent.com/codethemesx/proxy/refs/heads/main/bases.json'
+URL_REFERERS_JSON = 'https://raw.githubusercontent.com/codethemesx/proxy/refs/heads/main/referers.json'
 
 # Carregar JSON remoto
 def carregar_json_remoto(url):
