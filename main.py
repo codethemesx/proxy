@@ -2,21 +2,25 @@ from flask import Flask, request, Response
 import requests
 from urllib.parse import urljoin
 import json
-import os
 
 app = Flask(__name__)
 session = requests.Session()
 
-# Carregar JSONs de bases e referers
-def carregar_json(caminho):
-    if os.path.exists(caminho):
-        with open(caminho, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+# URLs dos JSONs remotos
+URL_BASES_JSON = 'https://seudominio.com/jsons/bases.json'
+URL_REFERERS_JSON = 'https://seudominio.com/jsons/referers.json'
 
-BASES = carregar_json('bases.json')
-REFERERS = carregar_json('referers.json')
+# Carregar JSON remoto
+def carregar_json_remoto(url):
+    try:
+        r = session.get(url, timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"Erro ao carregar JSON de {url}: {e}")
+        return []
 
+# Buscar valor de entrada a partir da saída
 def obter_entrada_por_saida(lista, saida):
     for item in lista:
         if item["saida"] == saida:
@@ -25,8 +29,11 @@ def obter_entrada_por_saida(lista, saida):
 
 @app.route('/<saida_base>/<saida_referer>/<path:path>')
 def proxy_masked(saida_base, saida_referer, path):
-    base_remota = obter_entrada_por_saida(BASES, saida_base)
-    referer = obter_entrada_por_saida(REFERERS, saida_referer)
+    bases = carregar_json_remoto(URL_BASES_JSON)
+    referers = carregar_json_remoto(URL_REFERERS_JSON)
+
+    base_remota = obter_entrada_por_saida(bases, saida_base)
+    referer = obter_entrada_por_saida(referers, saida_referer)
 
     if not base_remota or not referer:
         return "Base remota ou referer não encontrados no JSON.", 400
@@ -80,7 +87,6 @@ def proxy_masked(saida_base, saida_referer, path):
             response = Response(generate())
             response.headers['Content-Type'] = content_type if content_type else 'video/MP2T'
 
-        # Headers adicionais
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Headers'] = '*'
         response.headers['Cache-Control'] = 'no-cache'
