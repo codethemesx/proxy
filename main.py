@@ -3,6 +3,7 @@ import requests
 from urllib.parse import urljoin
 import json
 import yt_dlp
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 session = requests.Session()
@@ -10,8 +11,9 @@ session = requests.Session()
 URL_BASES_JSON = 'https://raw.githubusercontent.com/codethemesx/proxy/refs/heads/main/bases.json'
 URL_REFERERS_JSON = 'https://raw.githubusercontent.com/codethemesx/proxy/refs/heads/main/referers.json'
 
-# Obter lives do canal (retorna lista de dicionarios com id, titulo e m3u8)
-def obter_lives_do_canal(canal_url):
+# Obter lives do canal (retorna lista de dicionarios com titulo e m3u8)
+def obter_lives_do_canal(usuario):
+    canal_url = f"https://www.youtube.com/@{usuario}/live"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         resp = session.get(canal_url, headers=headers, timeout=5)
@@ -21,6 +23,7 @@ def obter_lives_do_canal(canal_url):
             href = a["href"]
             if "/watch" in href and "live" in href:
                 links.add("https://www.youtube.com" + href.split("&")[0])
+
         lives = []
         for link in links:
             ydl_opts = {'quiet': True, 'skip_download': True, 'forcejson': True, 'extract_flat': False}
@@ -29,7 +32,6 @@ def obter_lives_do_canal(canal_url):
                 for fmt in info.get("formats", []):
                     if fmt.get("protocol") == "m3u8":
                         lives.append({
-                            'id': info.get("id"),
                             'titulo': info.get("title"),
                             'm3u8': fmt.get("url")
                         })
@@ -56,10 +58,9 @@ def obter_entrada_por_saida(lista, saida):
             return item["entrada"]
     return None
 
-@app.route('/c/<int:numero_live>/<canal_id>.m3u8')
-def proxy_canal(numero_live, canal_id):
-    canal_url = f"https://www.youtube.com/{canal_id}/live"
-    lives = obter_lives_do_canal(canal_url)
+@app.route('/c/<int:numero_live>/<usuario>.m3u8')
+def proxy_canal_por_usuario(numero_live, usuario):
+    lives = obter_lives_do_canal(usuario)
     if numero_live > len(lives) or numero_live < 1:
         return f"Live {numero_live} não encontrada.", 404
     m3u8_url = lives[numero_live - 1]['m3u8']
