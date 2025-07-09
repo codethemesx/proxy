@@ -58,7 +58,7 @@ def obter_entrada_por_saida(lista, saida):
 
 @app.route('/c/<int:numero_live>/<canal_id>.m3u8')
 def proxy_canal(numero_live, canal_id):
-    canal_url = f"https://www.youtube.com/channel/{canal_id}/live"
+    canal_url = f"https://www.youtube.com/{canal_id}/live"
     lives = obter_lives_do_canal(canal_url)
     if numero_live > len(lives) or numero_live < 1:
         return f"Live {numero_live} não encontrada.", 404
