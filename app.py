@@ -4,6 +4,7 @@ import subprocess
 import threading
 from urllib.parse import urljoin
 import json
+import time
 
 app = Flask(__name__)
 session = requests.Session()
@@ -19,7 +20,7 @@ def carregar_json_remoto(url):
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        print(f"Erro ao carregar JSON de {url}: {e}")
+        print(f"[ERRO] Falha ao carregar JSON de {url}: {e}")
         return []
 
 def obter_entrada_por_saida(lista, saida):
@@ -27,6 +28,14 @@ def obter_entrada_por_saida(lista, saida):
         if item["saida"] == saida:
             return item["entrada"]
     return None
+
+def verificar_stream(url, headers):
+    try:
+        resp = session.head(url, headers=headers, timeout=5)
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"[ERRO] HEAD falhou para {url}: {e}")
+        return False
 
 @app.route('/')
 def painel():
@@ -36,64 +45,74 @@ def painel():
 def iniciar_live(saida_base, saida_referer, canal):
     rtmps = request.args.get("rtmps")
     token = request.args.get("token")
-
     if not rtmps or not token:
         return "Parâmetros 'rtmps' e 'token' são obrigatórios.", 400
 
     stream_key = f"{rtmps}{token}"
+    canal_id = f"{saida_base}_{saida_referer}_{canal}"
+
+    if canal_id in processos_ffmpeg:
+        return f"Live já está rodando para '{canal_id}'", 200
 
     bases = carregar_json_remoto(URL_BASES_JSON)
     referers = carregar_json_remoto(URL_REFERERS_JSON)
 
     base_remota = obter_entrada_por_saida(bases, saida_base)
     referer = obter_entrada_por_saida(referers, saida_referer)
-
     if not base_remota or not referer:
-        return "Base remota ou referer não encontrados.", 400
-
-    canal_id = f"{saida_base}_{saida_referer}_{canal}"
-
-    if canal_id in processos_ffmpeg:
-        return f"Live já está em execução para '{canal_id}'.", 200
+        return "Base remota ou referer inválido.", 400
 
     url_m3u8 = f"{base_remota}/{canal}"
     headers_ffmpeg = f"Referer: {referer}\r\nUser-Agent: Mozilla/5.0\r\n"
+    headers_requests = {
+        'Referer': referer,
+        'User-Agent': 'Mozilla/5.0'
+    }
+
+    # Verifica se o link HLS está acessível
+    if not verificar_stream(url_m3u8, headers_requests):
+        return f"[ERRO] Stream HLS inacessível: {url_m3u8}", 403
 
     comando = [
         "ffmpeg",
         "-re",
         "-headers", headers_ffmpeg,
         "-i", url_m3u8,
-        "-c:v", "copy",
-        "-c:a", "aac",
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c", "copy",
         "-f", "flv",
         stream_key
     ]
 
-    def iniciar_ffmpeg():
-        try:
-            processo = subprocess.Popen(comando)
-            processos_ffmpeg[canal_id] = processo
-            processo.wait()
-            del processos_ffmpeg[canal_id]
-        except Exception as e:
-            print(f"Erro ao iniciar FFmpeg: {e}")
+    def rodar_ffmpeg():
+        while True:
+            print(f"[INFO] Iniciando transmissão para {canal_id}")
+            try:
+                processo = subprocess.Popen(comando)
+                processos_ffmpeg[canal_id] = processo
+                processo.wait()
+                print(f"[INFO] Transmissão encerrada para {canal_id}")
+                if canal_id in processos_ffmpeg:
+                    del processos_ffmpeg[canal_id]
+                break
+            except Exception as e:
+                print(f"[ERRO] FFmpeg falhou: {e}")
+                time.sleep(5)
 
-    threading.Thread(target=iniciar_ffmpeg, daemon=True).start()
-
-    return f"Live iniciada para '{canal_id}'", 200
+    threading.Thread(target=rodar_ffmpeg, daemon=True).start()
+    return f"Transmissão iniciada para '{canal_id}'", 200
 
 @app.route('/<saida_base>/<saida_referer>/<path:canal>/live/exit')
 def parar_live(saida_base, saida_referer, canal):
     canal_id = f"{saida_base}_{saida_referer}_{canal}"
     processo = processos_ffmpeg.get(canal_id)
-
     if not processo:
-        return f"Nenhuma live em execução para '{canal_id}'.", 404
+        return f"Nenhuma live rodando para '{canal_id}'", 404
 
     processo.terminate()
     del processos_ffmpeg[canal_id]
-    return f"Live encerrada para '{canal_id}'", 200
+    return f"Transmissão encerrada para '{canal_id}'", 200
 
 @app.route('/<saida_base>/<saida_referer>/<path:path>')
 def proxy_m3u8(saida_base, saida_referer, path):
@@ -126,7 +145,6 @@ def proxy_m3u8(saida_base, saida_referer, path):
             lines = playlist_text.splitlines()
             new_lines = []
             base_url = request.host_url.rstrip('/')
-
             for line in lines:
                 line_strip = line.strip()
                 if line_strip == '' or line_strip.startswith('#'):
@@ -139,21 +157,13 @@ def proxy_m3u8(saida_base, saida_referer, path):
                         new_lines.append(proxied_url)
                     else:
                         new_lines.append(abs_url)
-
             data = "\n".join(new_lines)
-            response = Response(data, content_type='application/vnd.apple.mpegurl')
+            return Response(data, content_type='application/vnd.apple.mpegurl')
         else:
-            def generate():
-                for chunk in resp.iter_content(chunk_size=8192):
-                    yield chunk
-            response = Response(generate(), content_type=resp.headers.get('Content-Type', 'video/MP2T'))
-
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Cache-Control'] = 'no-cache'
-        return response
+            return Response(resp.iter_content(chunk_size=8192), content_type=resp.headers.get('Content-Type', 'video/MP2T'))
 
     except Exception as e:
-        return f"Erro no proxy: {e}", 500
+        return f"Erro ao acessar o stream: {e}", 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
