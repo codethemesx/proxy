@@ -125,7 +125,7 @@ def iniciar_transmissao(saida_base, saida_referer, canal):
         if not base_remota or not referer:
             return "Base ou Referer inválido.", 400
 
-        url_m3u8 = f"{base_remota}/{canal}/live.m3u8"
+        url_m3u8 = f"{base_remota}/{canal}/index.m3u8"
 
         comando = [
             "ffmpeg",
