@@ -1,9 +1,8 @@
-from flask import Flask, request, Response
+from flask import Flask, request, Response, render_template
 import requests
+import subprocess
+import threading
 from urllib.parse import urljoin
-import json
-import yt_dlp
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 session = requests.Session()
@@ -11,37 +10,11 @@ session = requests.Session()
 URL_BASES_JSON = 'https://raw.githubusercontent.com/codethemesx/proxy/refs/heads/main/bases.json'
 URL_REFERERS_JSON = 'https://raw.githubusercontent.com/codethemesx/proxy/refs/heads/main/referers.json'
 
-# Obter lives do canal (retorna lista de dicionarios com titulo e m3u8)
-def obter_lives_do_canal(usuario):
-    canal_url = f"https://www.youtube.com/@{usuario}/live"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        resp = session.get(canal_url, headers=headers, timeout=5)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        links = set()
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if "/watch" in href and "live" in href:
-                links.add("https://www.youtube.com" + href.split("&")[0])
+# Armazena processos FFmpeg ativos
+processos_ffmpeg = {}
+lock = threading.Lock()
 
-        lives = []
-        for link in links:
-            ydl_opts = {'quiet': True, 'skip_download': True, 'forcejson': True, 'extract_flat': False}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(link, download=False)
-                for fmt in info.get("formats", []):
-                    if fmt.get("protocol") == "m3u8":
-                        lives.append({
-                            'titulo': info.get("title"),
-                            'm3u8': fmt.get("url")
-                        })
-                        break
-        return lives
-    except Exception as e:
-        print(f"Erro ao buscar lives: {e}")
-        return []
-
-# Carregar JSON remoto
+# Função para carregar JSON remoto
 def carregar_json_remoto(url):
     try:
         r = session.get(url, timeout=5)
@@ -51,30 +24,16 @@ def carregar_json_remoto(url):
         print(f"Erro ao carregar JSON de {url}: {e}")
         return []
 
-# Buscar valor de entrada a partir da saida
+# Buscar valor de entrada a partir da saída
 def obter_entrada_por_saida(lista, saida):
     for item in lista:
         if item["saida"] == saida:
             return item["entrada"]
     return None
 
-@app.route('/c/<int:numero_live>/<usuario>.m3u8')
-def proxy_canal_por_usuario(numero_live, usuario):
-    lives = obter_lives_do_canal(usuario)
-    if numero_live > len(lives) or numero_live < 1:
-        return f"Live {numero_live} não encontrada.", 404
-    m3u8_url = lives[numero_live - 1]['m3u8']
-
-    try:
-        resp = session.get(m3u8_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        resp.raise_for_status()
-        response = Response(resp.text)
-        response.headers['Content-Type'] = 'application/vnd.apple.mpegurl'
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Cache-Control'] = 'no-cache'
-        return response
-    except Exception as e:
-        return f"Erro ao acessar live: {e}", 500
+@app.route('/')
+def painel():
+    return render_template('index.html')
 
 @app.route('/<saida_base>/<saida_referer>/<path:path>')
 def proxy_masked(saida_base, saida_referer, path):
@@ -91,7 +50,7 @@ def proxy_masked(saida_base, saida_referer, path):
 
     headers = {
         'Referer': referer,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         'Accept': '*/*',
         'Accept-Encoding': 'identity',
         'Connection': 'keep-alive',
@@ -104,22 +63,22 @@ def proxy_masked(saida_base, saida_referer, path):
         content_type = resp.headers.get('Content-Type', '').lower()
 
         if is_playlist or 'application/vnd.apple.mpegurl' in content_type:
-            playlist_text = resp.text
-            lines = playlist_text.splitlines()
+            lines = resp.text.splitlines()
             new_lines = []
             base_url = request.host_url.rstrip('/')
             for line in lines:
-                line_strip = line.strip()
-                if line_strip == '' or line_strip.startswith('#'):
-                    new_lines.append(line_strip)
+                line = line.strip()
+                if line == '' or line.startswith('#'):
+                    new_lines.append(line)
                 else:
-                    abs_url = urljoin(remote_url, line_strip)
+                    abs_url = urljoin(remote_url, line)
                     if abs_url.startswith(base_remota):
                         relative_path = abs_url.replace(base_remota + '/', '')
                         proxied_url = f"{base_url}/{saida_base}/{saida_referer}/{relative_path}"
                         new_lines.append(proxied_url)
                     else:
                         new_lines.append(abs_url)
+
             data = "\n".join(new_lines)
             response = Response(data)
             response.headers['Content-Type'] = 'application/vnd.apple.mpegurl'
@@ -143,5 +102,59 @@ def proxy_masked(saida_base, saida_referer, path):
     except Exception as e:
         return f"Erro no proxy: {e}", 500
 
+@app.route('/<saida_base>/<saida_referer>/<canal>/live/start')
+def iniciar_transmissao(saida_base, saida_referer, canal):
+    servidor = request.args.get('rtmps')
+    chave = request.args.get('token')
+
+    if not servidor or not chave:
+        return "Parâmetros 'rtmps' e 'token' são obrigatórios.", 400
+
+    stream_key = f"{servidor}/{chave}"
+    path_id = f"{saida_base}/{saida_referer}/{canal}/live"
+
+    with lock:
+        if path_id in processos_ffmpeg:
+            return "Transmissão já está em andamento.", 200
+
+        bases = carregar_json_remoto(URL_BASES_JSON)
+        referers = carregar_json_remoto(URL_REFERERS_JSON)
+        base_remota = obter_entrada_por_saida(bases, saida_base)
+        referer = obter_entrada_por_saida(referers, saida_referer)
+
+        if not base_remota or not referer:
+            return "Base ou Referer inválido.", 400
+
+        url_m3u8 = f"{base_remota}/{canal}/live.m3u8"
+
+        comando = [
+            "ffmpeg",
+            "-re", "-i", url_m3u8,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-f", "flv",
+            stream_key
+        ]
+
+        try:
+            processo = subprocess.Popen(comando)
+            processos_ffmpeg[path_id] = processo
+            return f"Transmissão iniciada para {path_id}.", 200
+        except Exception as e:
+            return f"Erro ao iniciar FFmpeg: {e}", 500
+
+@app.route('/<saida_base>/<saida_referer>/<canal>/live/exit')
+def parar_transmissao(saida_base, saida_referer, canal):
+    path_id = f"{saida_base}/{saida_referer}/{canal}/live"
+    with lock:
+        processo = processos_ffmpeg.get(path_id)
+        if processo:
+            processo.terminate()
+            processo.wait()
+            del processos_ffmpeg[path_id]
+            return f"Transmissão finalizada para {path_id}.", 200
+        else:
+            return "Nenhuma transmissão ativa encontrada.", 404
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    app.run(host='0.0.0.0', port=8000)
