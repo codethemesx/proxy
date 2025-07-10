@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Painel de Lives</title>
+  <style>
+    body { font-family: sans-serif; padding: 30px; background: #111; color: #eee; }
+    input, button { margin: 5px 0; padding: 5px; width: 100%; }
+    .log { margin-top: 20px; background: #222; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>🎥 Gerenciar Transmissão</h2>
+  <input id="base" placeholder="Base (ex: 1)">
+  <input id="referer" placeholder="Referer (ex: 1)">
+  <input id="canal" placeholder="Canal (ex: espn)">
+  <input id="rtmps" placeholder="URL RTMPS (ex: rtmps://...)">
+  <input id="token" placeholder="Token da Stream (ex: live_123...)">
+  <button onclick="start()">Iniciar Live</button>
+  <button onclick="stop()">Parar Live</button>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    function log(msg) {
+      document.getElementById('log').innerText = msg;
+    }
+
+    async function start() {
+      const b = document.getElementById('base').value;
+      const r = document.getElementById('referer').value;
+      const c = document.getElementById('canal').value;
+      const s = document.getElementById('rtmps').value;
+      const t = document.getElementById('token').value;
+      const url = `/${b}/${r}/${c}/live/start?rtmps=${encodeURIComponent(s)}&token=${encodeURIComponent(t)}`;
+      const res = await fetch(url);
+      log(await res.text());
+    }
+
+    async function stop() {
+      const b = document.getElementById('base').value;
+      const r = document.getElementById('referer').value;
+      const c = document.getElementById('canal').value;
+      const url = `/${b}/${r}/${c}/live/exit`;
+      const res = await fetch(url);
+      log(await res.text());
+    }
+  </script>
+</body>
+</html>
