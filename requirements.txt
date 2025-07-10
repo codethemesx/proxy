@@ -1,4 +1,2 @@
-yt-dlp
-requests
 Flask
-beautifulsoup4
+requests
